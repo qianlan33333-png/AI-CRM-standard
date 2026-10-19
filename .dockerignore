@@ -1,0 +1,12 @@
+.git
+.local
+.standard-secrets
+node_modules
+web/v3/node_modules
+release
+**/testdata
+**/*_test.go
+docs
+.env*
+*.pem
+*.key

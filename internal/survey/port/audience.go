@@ -1,0 +1,20 @@
+package port
+
+import (
+	"context"
+	"time"
+
+	customerdomain "github.com/qianlan33333-png/AI-CRM-standard/internal/customer/domain"
+)
+
+type AudienceChoiceAnswer struct {
+	CustomerID      customerdomain.CustomerID
+	QuestionnaireID ID
+	SubmissionID    ID
+	SubmittedAt     time.Time
+	QuestionID      ID
+	OptionIDs       []ID
+}
+type AudienceChoiceAnswerReader interface {
+	FirstCompleteAudienceChoices(context.Context, time.Time) ([]AudienceChoiceAnswer, error)
+}

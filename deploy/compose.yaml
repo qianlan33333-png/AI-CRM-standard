@@ -1,0 +1,79 @@
+name: crm-standard
+x-app: &app
+  image: ${CRM_IMAGE:-crm-standard:local}
+  env_file: ./runtime.env
+  environment:
+    GOMEMLIMIT: ${API_GO_MEMORY:-384MiB}
+    GOMAXPROCS: ${API_CPUS:-1}
+    AICRM_DATABASE_POOL_MAX: ${DB_POOL_MAX:-5}
+  volumes:
+    - app_data:/app/data
+  security_opt: ["no-new-privileges:true"]
+  logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+services:
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crm
+      POSTGRES_DB: crm_standard
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Generate runtime configuration first}
+    command: ["postgres", "-c", "shared_buffers=${PG_SHARED_BUFFERS:-128MB}", "-c", "work_mem=${PG_WORK_MEM:-2MB}", "-c", "maintenance_work_mem=32MB", "-c", "max_connections=${PG_MAX_CONNECTIONS:-25}", "-c", "idle_in_transaction_session_timeout=60000", "-c", "statement_timeout=60000"]
+    volumes: ["pg_data:/var/lib/postgresql/data"]
+    mem_limit: ${DB_MEMORY:-512m}
+    cpus: ${DB_CPUS:-0.75}
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U crm -d crm_standard"], interval: 5s, timeout: 3s, retries: 20}
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    profiles: ["tools"]
+    depends_on: {db: {condition: service_healthy}}
+    mem_limit: 384m
+  api:
+    <<: *app
+    restart: unless-stopped
+    mem_limit: ${API_MEMORY:-640m}
+    cpus: ${API_CPU_LIMIT:-1}
+    depends_on: {db: {condition: service_healthy}}
+    healthcheck: {test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"], interval: 15s, timeout: 5s, retries: 5}
+    ports: ["127.0.0.1:${LOCAL_API_PORT:-18080}:8080"]
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment: {CRM_DOMAIN: "${CRM_DOMAIN:?Set domain}"}
+    volumes: ["./Caddyfile:/etc/caddy/Caddyfile:ro", "caddy_data:/data", "caddy_config:/config"]
+    mem_limit: 128m
+    cpus: 0.25
+    depends_on: [api]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+  worker:
+    <<: *app
+    profiles: ["worker"]
+    environment:
+      AICRM_ROLE: effects-worker
+      GOMEMLIMIT: ${WORKER_GO_MEMORY:-512MiB}
+      GOMAXPROCS: 1
+      AICRM_DATABASE_POOL_MAX: ${WORKER_POOL_MAX:-5}
+    mem_limit: ${WORKER_MEMORY:-768m}
+    cpus: 1
+    restart: unless-stopped
+    depends_on: {db: {condition: service_healthy}}
+  excel:
+    image: crm-standard-excel:local
+    profiles: ["excel"]
+    # Shares API's loopback; SQLite and authenticated service remain private.
+    network_mode: service:api
+    env_file: ./excel.env
+    volumes: ["excel_data:/data", "./excel-config.json:/config.json:ro"]
+    mem_limit: 256m
+    cpus: 0.5
+    restart: unless-stopped
+    depends_on: [api]
+volumes:
+  pg_data:
+  app_data:
+  caddy_data:
+  caddy_config:
+  excel_data:

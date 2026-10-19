@@ -1,0 +1,24 @@
+package port
+
+import (
+	"context"
+
+	accessdomain "github.com/qianlan33333-png/AI-CRM-standard/internal/access/domain"
+)
+
+type AIAssistantAction string
+
+const (
+	AIAssistantRead        AIAssistantAction = "aiassistant.read"
+	AIAssistantReceiptRead AIAssistantAction = "aiassistant.receipt.read"
+	AIAssistantStop        AIAssistantAction = "aiassistant.task.stop"
+	AIAssistantReview      AIAssistantAction = "aiassistant.review"
+	AIAssistantApprove     AIAssistantAction = "aiassistant.approve"
+	AIAssistantReconcile   AIAssistantAction = "aiassistant.reconcile"
+)
+
+// AIAssistantAuthorizer is the narrow Access-owned permission seam used by
+// the AI Assistant HTTP adapter. It does not expose sessions or Access stores.
+type AIAssistantAuthorizer interface {
+	AuthorizeAIAssistant(context.Context, accessdomain.Principal, AIAssistantAction) error
+}

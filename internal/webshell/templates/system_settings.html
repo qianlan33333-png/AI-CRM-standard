@@ -1,0 +1,21 @@
+{{define "system_settings"}}
+<main class="ss-page" data-system-settings-root>
+ <header class="ss-header">
+  <div><div class="ss-title"><h1>系统配置</h1><span class="ss-role">超级管理员</span></div><p>统一管理系统能力与访问设置</p></div>
+  <label class="ss-search"><span class="sr-only">搜索配置项或后台账号</span><input id="ss-search" type="search" placeholder="搜索配置项或后台账号" autocomplete="off"></label>
+ </header>
+ <nav class="ss-tabs" aria-label="系统配置分类" id="ss-tabs"></nav>
+ <div id="ss-alert" class="ss-alert" role="status" aria-live="polite" hidden></div>
+ <section class="ss-workspace" id="ss-accounts">
+  <div class="ss-list">
+   <div class="ss-section-title"><h2>CLI 账号策略</h2><p>管理不同账号的 CLI 访问策略</p></div>
+   <p id="ss-loading" role="status">正在读取后台账号…</p>
+   <div class="ss-table-wrap"><table class="ss-table" aria-label="CLI 后台账号策略"><thead><tr><th scope="col">账号名称</th><th scope="col">后台账号</th><th scope="col">访问来源策略</th><th scope="col">IP 白名单数量</th></tr></thead><tbody id="ss-users"></tbody></table></div>
+   <p class="ss-list-note">浏览器登录始终为 8 小时，CLI 权限继承账号现有权限。</p>
+   <a class="ss-link" href="/admin/config/login-access">管理员工与权限</a>
+  </div>
+  <div class="ss-editor" id="ss-editor"><p class="ss-placeholder">选择一个后台账号，查看或编辑 CLI 白名单。</p></div>
+ </section>
+ <section id="ss-categories" class="ss-categories" aria-label="能力设置" hidden></section>
+</main>
+{{end}}

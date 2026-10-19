@@ -1,0 +1,256 @@
+package app
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	identityport "github.com/qianlan33333-png/AI-CRM-standard/internal/identity/port"
+	"github.com/qianlan33333-png/AI-CRM-standard/internal/order/domain"
+	orderport "github.com/qianlan33333-png/AI-CRM-standard/internal/order/port"
+	productport "github.com/qianlan33333-png/AI-CRM-standard/internal/product/port"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type shopStore interface {
+	UpsertShopOrderWithin(context.Context, orderport.ShopOrder, domain.Snapshot, [32]byte, time.Time, []byte, int16) (orderport.ShopSaved, error)
+	MarkShopDispatchWithin(context.Context, int64) error
+	PendingShopOrdersWithin(context.Context, string, string, string) ([]string, error)
+	UpsertShopBuyerWithin(context.Context, int64, orderport.ShopBuyerMaterial) error
+	ReadShopBuyerCiphertexts(context.Context, []int64) ([]orderport.ShopBuyerCiphertext, error)
+	PendingShopBuyerCiphertextsWithin(context.Context, string, [32]byte) ([]orderport.ShopBuyerCiphertext, error)
+	AssociateShopBuyerWithin(context.Context, int64, int64, string, []int64) error
+}
+type ShopOrders struct {
+	Membership orderport.PurchaseMembershipObserver
+	Store      shopStore
+	Products   productport.ShopCatalog
+	Consumer   orderport.ShopPaidConsumer
+	Cipher     orderport.ShopContactCipher
+	Identity   identityport.Resolver
+	Subjects   identityport.WriteLockedVerifiedIdentitySubjectReader
+	BuyerKeys  identityport.VerifiedIdentityKeyLocker
+	UnionScope string
+}
+
+func (s ShopOrders) PendingShopOrdersWithin(ctx context.Context, app, product, sku string) ([]string, error) {
+	return s.Store.PendingShopOrdersWithin(ctx, app, product, sku)
+}
+func (s ShopOrders) ImportShopOrderWithin(ctx context.Context, source orderport.ShopOrder, cutoff time.Time) error {
+	if source.PaidAt.IsZero() {
+		return nil
+	}
+	if s.Store == nil || s.Products == nil || s.Consumer == nil || s.Cipher == nil || source.AppID == "" || source.ID == "" || cutoff.IsZero() || source.PaidMinor < 0 || source.RefundedMinor < 0 || source.RefundedMinor > source.PaidMinor || len(source.Lines) == 0 || len(source.Lines) > 100 {
+		return orderport.ErrConflict
+	}
+	// Canonical line ordering survives a Provider response array reorder. Identical
+	// repeated SKU rows retain separate occurrence/line slots; quantity is unchanged.
+	source.Lines = append([]orderport.ShopOrderLine(nil), source.Lines...)
+	sort.SliceStable(source.Lines, func(i, j int) bool {
+		a, _ := json.Marshal(source.Lines[i])
+		b, _ := json.Marshal(source.Lines[j])
+		return string(a) < string(b)
+	})
+	if source.CreatedAt.IsZero() {
+		source.CreatedAt = source.PaidAt
+	}
+	if source.UpdatedAt.Before(source.PaidAt) {
+		source.UpdatedAt = source.PaidAt
+	}
+	frozen := struct {
+		App, ID, Transaction string
+		Created, Paid        time.Time
+		Amount               int64
+		Lines                []orderport.ShopOrderLine
+	}{source.AppID, source.ID, source.TransactionID, source.CreatedAt, source.PaidAt, source.PaidMinor, source.Lines}
+	raw, e := json.Marshal(frozen)
+	if e != nil {
+		return e
+	}
+	digest := sha256.Sum256(raw)
+	snap := domain.Snapshot{Provider: domain.ProviderWeChatShop, SourceSystem: "wechat-shop:" + source.AppID, SourceKey: source.ID, MerchantOrderNo: source.ID, ProviderTransactionNo: source.TransactionID, Amount: domain.Money{AmountMinor: source.PaidMinor, Currency: "CNY"}, Status: domain.StatusPaid, RecordOrigin: domain.RecordOriginExternal, Version: 2, CreatedAt: source.CreatedAt, UpdatedAt: source.PaidAt}
+	if snap.UpdatedAt.Before(snap.CreatedAt) {
+		snap.UpdatedAt = snap.CreatedAt
+	}
+	buyerID, buyerState, buyerLineage, e := s.resolveShopBuyer(ctx, source)
+	if e != nil {
+		return e
+	}
+	snap.PayerCustomerID, snap.BeneficiaryCustomerID = buyerID, buyerID
+	for index, line := range source.Lines {
+		if strings.TrimSpace(line.Name) == "" || line.ProductID == "" || line.SKUID == "" {
+			return orderport.ErrConflict
+		}
+		id, found, e := s.Products.ResolveShopSKUWithin(ctx, source.AppID, line.ProductID, line.SKUID)
+		if e != nil {
+			return e
+		}
+		var productID *int64
+		if found {
+			v := int64(id)
+			productID = &v
+		}
+		code := fmt.Sprintf("wxshop-%x", sha256.Sum256([]byte(source.AppID+"\x00"+line.ProductID+"\x00"+line.SKUID)))
+		snap.Items = append(snap.Items, domain.ItemSnapshot{LineNo: int32(index + 1), ProductID: productID, ProductCode: code, ProductName: line.Name, UnitAmountMinor: line.UnitMinor, Quantity: line.Quantity, LineAmountMinor: line.PaidMinor})
+	}
+	if _, e = domain.Restore(snap); e != nil {
+		return e
+	}
+	contact, _ := json.Marshal(struct{ Phone, Account string }{source.Phone, source.Account})
+	aad := []byte("order.shop.contact.v1:" + source.AppID + ":" + source.ID)
+	encrypted, version, e := s.Cipher.EncryptCommercePayload(contact, aad)
+	if e != nil {
+		return orderport.ErrUnavailable
+	}
+	saved, e := s.Store.UpsertShopOrderWithin(ctx, source, snap, digest, cutoff, encrypted, version)
+	if e != nil {
+		return e
+	}
+	deliveryPhone, deliveryAccount := source.Phone, source.Account
+	if saved.Event.OrderID > 0 {
+		buyer := shopBuyerDetails{Phone: source.Phone, Account: source.Account, Nickname: source.Nickname}
+		if source.Buyer.Valid() {
+			buyer.OpenID = source.Buyer.Reference().NormalizedValue
+		}
+		material := orderport.ShopBuyerMaterial{CustomerID: buyerID, State: buyerState, CanonicalLineage: buyerLineage}
+		if source.BuyerUnion.Valid() {
+			ref := source.BuyerUnion.Reference()
+			buyer.UnionID, buyer.UnionScope = ref.NormalizedValue, ref.Scope
+			material.UnionScope, material.UnionDigest = ref.Scope, shopBuyerUnionDigest(ref)
+		}
+		// Later refund responses may omit optional contacts. Keep previously
+		// verified lookup material and display facts for this exact source.
+		previous, err := s.Store.ReadShopBuyerCiphertexts(ctx, []int64{saved.Event.OrderID})
+		if err != nil {
+			return err
+		}
+		if len(previous) != 0 {
+			prior, err := s.decodeShopBuyer(previous[0])
+			if err != nil {
+				return err
+			}
+			if buyer.Phone == "" {
+				buyer.Phone = prior.Phone
+			}
+			if buyer.Account == "" {
+				buyer.Account = prior.Account
+			}
+			if buyer.Nickname == "" {
+				buyer.Nickname = prior.Nickname
+			}
+			if buyer.OpenID == "" {
+				buyer.OpenID = prior.OpenID
+			}
+			if buyer.UnionID == "" && prior.UnionScope != "" {
+				buyer.UnionID, buyer.UnionScope = prior.UnionID, prior.UnionScope
+				material.UnionScope = prior.UnionScope
+				material.UnionDigest = shopBuyerUnionDigest(identityReferenceForDigest(prior.UnionScope, prior.UnionID))
+			}
+		}
+		body, err := json.Marshal(buyer)
+		if err != nil {
+			return orderport.ErrUnavailable
+		}
+		material.Ciphertext, material.KeyVersion, err = s.Cipher.EncryptCommercePayload(body, shopBuyerAAD(source.AppID, source.ID))
+		if err != nil {
+			return orderport.ErrUnavailable
+		}
+		if err = s.Store.UpsertShopBuyerWithin(ctx, saved.Event.OrderID, material); err != nil {
+			return err
+		}
+		deliveryPhone, deliveryAccount = buyer.Phone, buyer.Account
+	}
+	if s.Membership != nil && buyerID != nil {
+		if e = s.Membership.PurchaseQualificationChangedWithin(ctx, *buyerID, "shop:"+strconv.FormatInt(saved.Event.OrderID, 10)+":"+source.UpdatedAt.UTC().Format(time.RFC3339Nano)); e != nil {
+			return e
+		}
+	}
+	if !saved.Eligible || saved.Event.ID == 0 {
+		return nil
+	}
+	// Qualification and downstream fulfillment both fail closed while a refund
+	// is known, pending, or unreadable. Empty state is retained for legacy
+	// importer fixtures; official Provider reads always supply an explicit state.
+	if !shopOrderRefundClear(source) || !shopOrderRefundClear(orderport.ShopOrder{QualificationRefundState: saved.QualificationRefundState}) {
+		return nil
+	}
+	pending, e := s.shopOrderDispatchPending(ctx, source)
+	if e != nil {
+		return e
+	}
+	if !pending {
+		return nil
+	}
+	// Paid facts remain frozen. Before the first intent is accepted, delivery
+	// uses the official detail just read (or previously read optional contacts),
+	// rather than perpetuating empty contacts from initial catalog/config waits.
+	// Outbound retains any already accepted intent's immutable body and key.
+	contact, e = s.Cipher.DecryptCommercePayload(saved.Ciphertext, saved.KeyVersion, aad)
+	if e != nil {
+		return orderport.ErrUnavailable
+	}
+	var values struct{ Phone, Account string }
+	if json.Unmarshal(contact, &values) != nil {
+		return orderport.ErrUnavailable
+	}
+	if deliveryPhone == "" {
+		deliveryPhone = values.Phone
+	}
+	if deliveryAccount == "" {
+		deliveryAccount = values.Account
+	}
+	saved.Event.ShopPhone, saved.Event.ShopAccount = deliveryPhone, deliveryAccount
+	saved.Event.Order.PayerCustomerID, saved.Event.Order.BeneficiaryCustomerID = buyerID, buyerID
+	for i, line := range saved.Lines {
+		if i >= len(saved.Event.Order.Items) {
+			return orderport.ErrConflict
+		}
+		id, found, e := s.Products.ResolveShopSKUWithin(ctx, source.AppID, line.ProductID, line.SKUID)
+		if e != nil {
+			return e
+		}
+		if found {
+			v := int64(id)
+
+			saved.Event.Order.Items[i].ProductID = &v
+		}
+	}
+	accepted, e := s.Consumer.ConsumeShopPaidEventWithin(ctx, saved.Event)
+	if e != nil {
+		return e
+	}
+	if accepted {
+		return s.Store.MarkShopDispatchWithin(ctx, saved.Event.OrderID)
+	}
+	return nil
+}
+
+func shopOrderRefundClear(source orderport.ShopOrder) bool {
+	if source.RefundedMinor > 0 {
+		return false
+	}
+	switch source.QualificationRefundState {
+	case "", "clear": // Empty is accepted only for older fixtures.
+		return true
+	default: // pending, refunded, unknown, and unrecognized states fail closed.
+		return false
+	}
+}
+
+func (s ShopOrders) shopOrderDispatchPending(ctx context.Context, source orderport.ShopOrder) (bool, error) {
+	for _, line := range source.Lines {
+		orders, err := s.Store.PendingShopOrdersWithin(ctx, source.AppID, line.ProductID, line.SKUID)
+		if err != nil {
+			return false, err
+		}
+		for _, orderID := range orders {
+			if orderID == source.ID {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}

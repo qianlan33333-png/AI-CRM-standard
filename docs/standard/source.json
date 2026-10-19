@@ -1,0 +1,14 @@
+{
+  "source_repository": "AI-CRM-v4",
+  "source_head": "2f96a4a5985053daee8916f56adfd83bc5d5edb2",
+  "source_tree": "f4c0866a6e342c23ef39cae67ecda494b38d5fb6",
+  "scope": "complete generic CRM plus lightweight customer context; independent deployment",
+  "excluded": [
+    "existing Git history",
+    "existing deployment workflows",
+    "company operations evidence",
+    "runtime data",
+    "credentials",
+    "Context Center installation receipts"
+  ]
+}

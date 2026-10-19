@@ -1,0 +1,39 @@
+package wecom
+
+import (
+	"context"
+	customerdomain "github.com/qianlan33333-png/AI-CRM-standard/internal/customer/domain"
+	platformpostgres "github.com/qianlan33333-png/AI-CRM-standard/internal/platform/postgres"
+	wecomport "github.com/qianlan33333-png/AI-CRM-standard/internal/wecom/port"
+	"strings"
+	"time"
+)
+
+func (PostgreSQLFollowRelationshipStore) AudienceRecognizedContacts(ctx context.Context, scope string, at time.Time) ([]customerdomain.CustomerID, error) {
+	if err := lockDirectoryRead(ctx); err != nil {
+		return nil, err
+	}
+	if at.IsZero() || !strings.HasPrefix(scope, "wecom-corp:") || len(scope) <= len("wecom-corp:") {
+		return nil, ErrInvalidFollowRelationship
+	}
+	tx, err := platformpostgres.RequireTransaction(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `SELECT p.customer_id FROM wecom_external_contact_profiles p JOIN wecom_customer_sync_runs r ON r.id=p.last_seen_run_id AND r.status='succeeded' WHERE p.corp_scope=$1 AND p.activation_status IN ('active','stale') ORDER BY p.customer_id`, scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []customerdomain.CustomerID{}
+	for rows.Next() {
+		var id customerdomain.CustomerID
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+var _ wecomport.AudienceRecognizedContactReader = PostgreSQLFollowRelationshipStore{}

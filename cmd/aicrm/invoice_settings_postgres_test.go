@@ -1,0 +1,198 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	ca "github.com/qianlan33333-png/AI-CRM-standard/internal/config/app"
+	cp "github.com/qianlan33333-png/AI-CRM-standard/internal/config/port"
+	cs "github.com/qianlan33333-png/AI-CRM-standard/internal/config/store"
+	invoice "github.com/qianlan33333-png/AI-CRM-standard/internal/invoice"
+	ip "github.com/qianlan33333-png/AI-CRM-standard/internal/invoice/port"
+	cfg "github.com/qianlan33333-png/AI-CRM-standard/internal/platform/config"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestInvoiceSettingsPostgreSQLProductTaxWithoutDefault(t *testing.T) {
+	f := newInvoiceFixture(t)
+	runtime := cfg.NormalizeRuntimePolicyDefaults(cfg.Runtime{})
+	runtime.Invoice = cfg.Invoice{Enabled: true, ServiceMerchantID: "service", MerchantSerial: "serial", SellerName: "销售方", SellerTaxID: "SELLER-TAX", BillingPersonID: "开票人", PrivateKeyPath: "fixture-private", PublicKeyPath: "fixture-public", APIV3Key: strings.Repeat("A", 32)}
+	runtime.WeChatPay.Enabled, runtime.WeChatPay.H5OAuthEnabled = true, true
+	runtime.WeChatPay.AppID, runtime.WeChatPay.H5AppID = "wx-fixture", "wx-fixture"
+	runtime.WeChatPay.H5AppScope = "wechat-app:wx-fixture"
+	runtime.WeChatPay.MerchantID, runtime.WeChatPay.MerchantSerial = f.s.Config.MerchantID, "serial"
+	runtime.WeChatPay.AppSecret, runtime.WeChatPay.H5AppSecret = "fixture-app", "fixture-h5"
+	runtime.WeChatPay.PrivateKeyPath, runtime.WeChatPay.PlatformCertPath = "fixture-private", "fixture-cert"
+	runtime.WeChatPay.APIV3Key, runtime.WeChatPay.OrderContactDataKey = strings.Repeat("A", 32), "fixture-contact"
+	runtime.Invoice.TaxConfigPath = filepath.Join(t.TempDir(), "product-tax.json")
+	finance, _ := json.Marshal(f.s.Config.Taxes)
+	if err := os.WriteFile(runtime.Invoice.TaxConfigPath, finance, 0600); err != nil {
+		t.Fatal(err)
+	}
+	defaults, err := runtimeConfigDefaults(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guards := runtimeConfigActivationGuards(runtime)
+	if !guards.InvoiceTaxMappingReady || validateAppliedRuntimeConfig(runtime) != nil {
+		t.Fatal("valid existing product taxes cannot activate")
+	}
+	repo, err := cs.NewPostgreSQL(f.pool, f.s.UoW)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releases, err := ca.NewRuntimeReleaseService(f.s.UoW, repo, repo, 1, ca.WithRuntimeDefaults(defaults), ca.WithRuntimeActivationGuards(guards))
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := releases.CreateRuntimeReleaseDraft(f.ctx, cp.RuntimeReleaseDraftCommand{Actor: "7", IdempotencyKey: "product-tax-only-save", Settings: []cp.RuntimeSetting{runtimeApplySetting(t, cp.InvoiceSellerName, "已核对销售方")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validated, err := releases.ValidateRuntimeRelease(f.ctx, cp.RuntimeReleaseMutationCommand{ReleaseID: draft.ID, Actor: "7", IdempotencyKey: "product-tax-only-validate"})
+	if err != nil || validated.State != cp.RuntimeReleaseValidated {
+		t.Fatal("product-only configuration cannot publish", err, validated.ValidationErrors)
+	}
+	if _, err = releases.PublishRuntimeRelease(f.ctx, cp.RuntimeReleasePublishCommand{ReleaseID: draft.ID, Actor: "7", IdempotencyKey: "product-tax-only-publish", ExpectedChecksum: validated.Checksum}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := releases.EffectiveSnapshot(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, err := applyRuntimeConfig(runtime, snapshot)
+	if err != nil || applied.Invoice.DefaultTaxCode != "" || applied.Invoice.DefaultGoodsName != "" {
+		t.Fatal("published product-only configuration invented a default", err)
+	}
+	consumer, _, err := composeInvoice(f.s.UoW, f.s.Sessions, f.s.Lineage.(invoiceIdentity), f.s.Orders, f.s.Refunds, f.effects, f.s.Jobs.(invoice.QueryEnqueuer).Client, applied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer.Provider = f.s.Provider
+	known := f.orderWithProduct(f.customer, f.customer, "paid", "有专属税目", "course", "wechat_pay", time.Now())
+	missing := f.orderWithProduct(f.customer, f.customer, "paid", "尚未配置税目", "future", "wechat_pay", time.Now())
+	page, err := consumer.List(f.ctx, f.token, ip.OrdersQuery{Limit: 20})
+	if err != nil || len(page.Items) != 2 {
+		t.Fatal("published product taxes unavailable to order consumer", err)
+	}
+	for _, item := range page.Items {
+		if item.ID == known && !item.InvoiceEligible || item.ID == missing && (item.InvoiceEligible || item.InvoiceReason != "tax_not_configured") {
+			t.Fatal("product-only tax eligibility changed", item.ID, item.InvoiceReason)
+		}
+	}
+	unchanged, err := os.ReadFile(runtime.Invoice.TaxConfigPath)
+	if err != nil || string(unchanged) != string(finance) {
+		t.Fatal("publication changed existing finance material")
+	}
+}
+
+func TestInvoiceSettingsPostgreSQLPublishAndCompositionReadback(t *testing.T) {
+	f := newInvoiceFixture(t)
+	ctx := context.Background()
+	runtime := cfg.NormalizeRuntimePolicyDefaults(cfg.Runtime{})
+	runtime.Invoice = cfg.Invoice{Enabled: true, ServiceMerchantID: "service", MerchantSerial: "serial", SellerName: "销售方", SellerTaxID: "SELLER-TAX", BillingPersonID: "开票人", DefaultTaxCode: "3040203000000000000", DefaultTaxRate: 100, DefaultGoodsName: "服务费", MaterialDir: filepath.Join(t.TempDir(), "keys"), LogoURL: "https://mmbiz.qpic.cn/mmbiz_png/fixture/0", CardConfirmed: true}
+	runtime.PublicOrigin = "https://crm.test"
+	runtime.WeChatPay.Enabled = true
+	runtime.WeChatPay.H5OAuthEnabled = true
+	runtime.WeChatPay.AppID = "wx-fixture"
+	runtime.WeChatPay.H5AppID = "wx-fixture"
+	runtime.WeChatPay.H5AppScope = "wechat-app:wx-fixture"
+	runtime.WeChatPay.MerchantID = f.s.Config.MerchantID
+	runtime.WeChatPay.MerchantSerial = "serial"
+	runtime.Invoice.TaxConfigPath = filepath.Join(t.TempDir(), "tax.json")
+	if e := os.WriteFile(runtime.Invoice.TaxConfigPath, []byte(`{"course":{"code":"3010101020203000000","rate":600,"goods_name":"课程"}}`), 0600); e != nil {
+		t.Fatal(e)
+	}
+	id, e := (ca.InvoiceKeyFiles{Directory: runtime.Invoice.MaterialDir}).StageInvoiceKey(ctx, strings.Repeat("A", 32))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defaults, e := runtimeConfigDefaults(runtime)
+	if e != nil {
+		t.Fatal(e)
+	}
+	repo, e := cs.NewPostgreSQL(f.pool, f.s.UoW)
+	if e != nil {
+		t.Fatal(e)
+	}
+	guards := ca.RuntimeActivationGuards{InvoiceSigningReady: true, InvoiceKeyConfigured: true, WeChatPayEnabled: true, WeChatPayH5OAuthEnabled: true, InvoiceKeyReferenceExists: func(ref string) bool {
+		_, e := (ca.InvoiceKeyFiles{Directory: runtime.Invoice.MaterialDir}).Read(ref)
+		return e == nil
+	}}
+	releases, e := ca.NewRuntimeReleaseService(f.s.UoW, repo, repo, 1, ca.WithRuntimeDefaults(defaults), ca.WithRuntimeActivationGuards(guards))
+	if e != nil {
+		t.Fatal(e)
+	}
+	for i, name := range []string{strings.Repeat("a", 129), strings.Repeat("服", 129)} {
+		if _, err := releases.CreateRuntimeReleaseDraft(ctx, cp.RuntimeReleaseDraftCommand{Actor: "7", IdempotencyKey: fmt.Sprintf("invoice-invalid-name-%d", i), Settings: []cp.RuntimeSetting{runtimeApplySetting(t, cp.InvoiceDefaultGoodsName, name)}}); err == nil {
+			t.Fatal("unstartable invoice configuration accepted as draft")
+		}
+	}
+	draft, e := releases.CreateRuntimeReleaseDraft(ctx, cp.RuntimeReleaseDraftCommand{Actor: "7", IdempotencyKey: "invoice-settings-save-1", Settings: []cp.RuntimeSetting{runtimeApplySetting(t, cp.InvoiceKeyFileID, id), runtimeApplySetting(t, cp.InvoiceDefaultGoodsName, "已发布服务费")}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	validated, e := releases.ValidateRuntimeRelease(ctx, cp.RuntimeReleaseMutationCommand{ReleaseID: draft.ID, Actor: "7", IdempotencyKey: "invoice-settings-validate-1"})
+	if e != nil || validated.State != cp.RuntimeReleaseValidated {
+		t.Fatalf("finance config invalid: %v %+v", e, validated.ValidationErrors)
+	}
+	if _, e = releases.PublishRuntimeRelease(ctx, cp.RuntimeReleasePublishCommand{ReleaseID: draft.ID, ExpectedChecksum: validated.Checksum, Actor: "7", IdempotencyKey: "invoice-settings-publish-1"}); e != nil {
+		t.Fatal(e)
+	}
+	snapshot, e := releases.EffectiveSnapshot(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	raw, _ := json.Marshal(snapshot)
+	if strings.Contains(string(raw), strings.Repeat("A", 32)) || strings.Contains(string(raw), runtime.Invoice.MaterialDir) {
+		t.Fatal("private material persisted in public snapshot")
+	}
+	applied, e := applyRuntimeConfig(runtime, snapshot)
+	if e != nil || applied.Invoice.APIV3Key != strings.Repeat("A", 32) {
+		t.Fatal("new process did not read published private reference")
+	}
+	consumer, _, e := composeInvoice(f.s.UoW, f.s.Sessions, f.s.Lineage.(invoiceIdentity), f.s.Orders, f.s.Refunds, f.effects, f.s.Jobs.(invoice.QueryEnqueuer).Client, applied)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if consumer.Config.Taxes["*"].GoodsName != "已发布服务费" || consumer.Config.Taxes["course"].Rate != 600 {
+		t.Fatal("default did not apply or product override was overwritten")
+	}
+	if e = releases.RecordRuntimeApplication(ctx, cp.RuntimeApplication{Revision: snapshot.Revision, Source: snapshot.Source, Role: "api", ReleaseSHA: "invoice-settings-fixture", SnapshotChecksum: snapshot.Checksum, AppliedAt: time.Now().UTC()}); e != nil {
+		t.Fatal(e)
+	}
+	facts, e := releases.ListRuntimeApplications(ctx, 10)
+	if e != nil || len(facts) != 1 || facts[0].SnapshotChecksum != snapshot.Checksum {
+		t.Fatal("actual application fact missing")
+	}
+	for i, name := range []string{strings.Repeat("a", 128), strings.Repeat("服", 128)} {
+		key := fmt.Sprintf("invoice-name-boundary-%d", i)
+		draft, err := releases.CreateRuntimeReleaseDraft(ctx, cp.RuntimeReleaseDraftCommand{Actor: "7", IdempotencyKey: key + "-save", ExpectedBaseRevision: snapshot.Revision, Settings: []cp.RuntimeSetting{runtimeApplySetting(t, cp.InvoiceDefaultGoodsName, name)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		validated, err := releases.ValidateRuntimeRelease(ctx, cp.RuntimeReleaseMutationCommand{ReleaseID: draft.ID, Actor: "7", IdempotencyKey: key + "-validate"})
+		if err != nil || validated.State != cp.RuntimeReleaseValidated {
+			t.Fatal("valid boundary failed validation", err, validated.ValidationErrors)
+		}
+		if _, err = releases.PublishRuntimeRelease(ctx, cp.RuntimeReleasePublishCommand{ReleaseID: draft.ID, ExpectedChecksum: validated.Checksum, ExpectedBaseRevision: snapshot.Revision, Actor: "7", IdempotencyKey: key + "-publish"}); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err = releases.EffectiveSnapshot(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		applied, err = applyRuntimeConfig(runtime, snapshot)
+		if err != nil {
+			t.Fatal("published boundary cannot apply", err)
+		}
+		consumer, _, err = composeInvoice(f.s.UoW, f.s.Sessions, f.s.Lineage.(invoiceIdentity), f.s.Orders, f.s.Refunds, f.effects, f.s.Jobs.(invoice.QueryEnqueuer).Client, applied)
+		if err != nil || consumer.Config.Taxes["*"].GoodsName != name || consumer.Config.Taxes["course"].Rate != 600 {
+			t.Fatal("publish/apply/compose item-name contract mismatch", err)
+		}
+	}
+}
