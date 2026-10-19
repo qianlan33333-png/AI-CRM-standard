@@ -24,12 +24,12 @@ docker build --platform linux/amd64 -f deploy/Excel.Dockerfile -t crm-standard-e
 gzip -dc crm-standard-SHA.tar.gz | docker load
 python3 init.py --directory . --domain crm.qianlan333.cloud --profile test2g --image crm-standard:SHA
 docker compose up -d db
-docker compose run --rm migrate
+docker compose run --rm -T migrate < /dev/null
 docker compose up -d api proxy
 docker compose ps
 ```
 
-`init.py` 拒绝覆盖已有配置，随机生成独立密码和加密密钥。`runtime.env`、`.env`、`administrator.txt` 只保存在安装机的受限目录，不提交仓库。登录信息在 `administrator.txt`。管理员建立后把 `runtime.env` 的 `AICRM_BOOTSTRAP_ENABLED` 改为 `false`，再 `docker compose up -d api`。
+`init.py` 拒绝覆盖已有配置，随机生成独立密码和加密密钥。`runtime.env`、`.env`、`administrator.txt` 只保存在安装机的受限目录，不提交仓库。登录信息在 `administrator.txt`。管理员建立后把 `runtime.env` 的 `AICRM_BOOTSTRAP_ENABLED` 改为 `false`，并同时清空 BOOTSTRAP_USERNAME、BOOTSTRAP_PASSWORD、BOOTSTRAP_DISPLAY_NAME 三项，再 `docker compose up -d api`。三项必须整组保留或整组清空。通过 SSH 脚本运行迁移时使用上面的非交互形式，防止容器读取后续脚本内容。
 
 数据库只在 Compose 网络内访问，没有宿主机 5432 映射。API 的 18080 只绑定宿主机回环；Caddy 提供 HTTPS 并持久化证书。数据库、应用文件、证书、Excel SQLite 都用独立卷；`docker compose down` 保留数据，禁止把 `down -v` 当作普通升级操作。
 

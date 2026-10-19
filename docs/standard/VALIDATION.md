@@ -9,6 +9,7 @@
 - `TestAISuggestionPendingPollKeepsReceiptKeyAndRejectsChangedSnapshot` 以及现有 Sidebar AI 测试：异步轮询保持键，商品/上下文变化后拒绝旧建议，当前查看者变化和范围错误拒绝。
 - customer/app、automation/app/provider、sidebar、product/app/http、operationcycle/app/http、platform/config/jobqueue 的相关测试运行；不同环境要求的旧浏览器/已安装 Provider 测试可能有其明确 skip，未将 skip 算作验收。相关 PostgreSQL 及新具名用例单独运行通过。
 - 前端构建和 host 构建；商品重复保存/外推部分失败恢复 Node 合同通过。浏览器内部说明保存刷新、无外部配置的商品创建、空人群策略入口通过。
+- 独立安装包增加已冻结标签页的私有别名，并校验其字节摘要，解决原共享打包阶段才准备该文件的问题；复用原标签 UI，无前端重写。
 - 本机 Linux/amd64 镜像构建成功；Compose 全新数据库/API 健康。初始 customers/products/orders/river_job 均为 0；数据库 16.15。最终准确版本与目标收据见交付记录。
 
 ## 边界与反例结论
