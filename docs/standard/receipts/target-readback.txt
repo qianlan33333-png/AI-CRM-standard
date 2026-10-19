@@ -1,0 +1,67 @@
+{"release_sha":"7793baf4931fe805efce033412170dd16b614ce6","status":"ready"}
+
+Containers
+NAME                   IMAGE                                                   COMMAND                  SERVICE   CREATED          STATUS                    PORTS
+crm-standard-api-1     crm-standard:7793baf4931fe805efce033412170dd16b614ce6   "standard-entrypoint…"   api       47 seconds ago   Up 46 seconds (healthy)   127.0.0.1:18080->8080/tcp
+crm-standard-db-1      postgres:16-bookworm                                    "docker-entrypoint.s…"   db        14 minutes ago   Up 14 minutes (healthy)   5432/tcp
+crm-standard-proxy-1   caddy:2                                                 "caddy run --config …"   proxy     10 minutes ago   Up 10 minutes             0.0.0.0:80->80/tcp, [::]:80->80/tcp, 0.0.0.0:443->443/tcp, [::]:443->443/tcp, 0.0.0.0:443->443/udp, [::]:443->443/udp, 2019/tcp
+
+Image and binary
+sha256:29444e84dcd322ccb308b80059b93c45ff7820cb4c89da4dff9d7075f70dd3c6
+ef11aab52df9bf34123713cde015fa4b0afa871727ac2883d9bfc9d9422fec6b  /usr/local/bin/aicrm
+
+Resources
+crm-standard-api-1 138.2MiB / 640MiB 0.00%
+crm-standard-proxy-1 14.39MiB / 128MiB 0.00%
+crm-standard-db-1 100.4MiB / 512MiB 0.01%
+               total        used        free      shared  buff/cache   available
+Mem:            1930         884         207         109        1135        1045
+Swap:           2047         358        1689
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda3        39G   13G   25G  33% /
+
+Old tasks
+UNIT FILE                            STATE  PRESET
+aicrm-automation-bootstrap.service   masked enabled
+aicrm-customer-sync-daily.service    masked enabled
+aicrm-effects-worker.service         masked enabled
+aicrm-hxc-daily-lessons-sync.service masked enabled
+aicrm-hxc-dashboard-refresh.service  masked enabled
+aicrm-hxc-dashboard-rollout.service  masked enabled
+aicrm-migrate.service                masked enabled
+aicrm-runtime-retention.service      masked enabled
+aicrm-wecom-worker.service           masked enabled
+aicrm.service                        masked enabled
+aicrm-customer-sync-daily.timer      masked enabled
+aicrm-hxc-daily-lessons-sync.timer   masked enabled
+aicrm-hxc-dashboard-refresh.timer    masked enabled
+aicrm-wecom-worker.timer             masked enabled
+
+14 unit files listed.
+
+Safe configuration flags
+AICRM_AI_GENERATION_ENABLED=false
+AICRM_ALIPAY_PROVIDER_ENABLED=false
+AICRM_BOOTSTRAP_ENABLED=false
+AICRM_OPS_ENABLED=false
+AICRM_OPS_NOTIFICATION_ENABLED=false
+AICRM_OPS_RETENTION_ENABLED=false
+AICRM_OUTBOUND_PROVIDER_ENABLED=false
+AICRM_RELEASE_SHA=7793baf4931fe805efce033412170dd16b614ce6
+AICRM_ROLE=api
+AICRM_STANDARD_PERIODIC_ENABLED=false
+AICRM_WECHAT_PAY_PROVIDER_ENABLED=false
+AICRM_WECHAT_SHOP_PROVIDER_ENABLED=false
+AICRM_WECOM_CUSTOMER_SYNC_ENABLED=false
+AICRM_WECOM_ENABLED=false
+AICRM_WECOM_MESSAGE_ARCHIVE_ENABLED=false
+bootstrap_fields_empty=True
+
+Listeners
+LISTEN 0      4096         0.0.0.0:443        0.0.0.0:*   
+LISTEN 0      4096         0.0.0.0:80         0.0.0.0:*   
+LISTEN 0      4096         0.0.0.0:22         0.0.0.0:*   
+LISTEN 0      4096       127.0.0.1:18080      0.0.0.0:*   
+LISTEN 0      4096            [::]:443           [::]:*   
+LISTEN 0      4096            [::]:80            [::]:*   
+LISTEN 0      4096            [::]:22            [::]:*   

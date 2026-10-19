@@ -28,7 +28,7 @@ func TestContextHistoryDedupLateArrivalAndScope(t *testing.T) {
 func TestContextAnalysisRejectsFabricatedOrStaffOnlyEvidence(t *testing.T) {
 	es := []customerport.ContextEvidence{{Ref: "chat:customer", Role: "customer"}, {Ref: "chat:staff", Role: "staff"}}
 	for _, ref := range []string{"missing", "chat:staff"} {
-		if ValidateContextAnalysis(customerport.ContextAnalysis{Summary: "摘要", Needs: []customerport.ContextStatement{{Text: "需求", EvidenceRefs: []string{ref}}}}, es) == nil {
+		if ValidateContextAnalysis(customerport.ContextAnalysis{Summary: "摘要", SummaryEvidenceRefs: []string{"chat:customer"}, Needs: []customerport.ContextStatement{{Text: "需求", EvidenceRefs: []string{ref}}}}, es) == nil {
 			t.Fatalf("accepted %s", ref)
 		}
 	}

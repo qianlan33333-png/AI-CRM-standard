@@ -1,0 +1,20 @@
+{
+  "runtime_head": "7793baf4931fe805efce033412170dd16b614ce6",
+  "runtime_tree": "4ecccb3e0b20100602c5440a2b8526208afccfda",
+  "host": "49.232.57.128",
+  "origin": "https://crm.qianlan333.cloud",
+  "private_repository": "qianlan33333-png/AI-CRM-standard",
+  "provider_business_validation": false,
+  "model_semantic_validation": false,
+  "business_data_empty": true,
+  "admin_count": 1,
+  "river_jobs": 0,
+  "external_effects": 0,
+  "postgres_version": "16.15",
+  "caddy_version": "2.11.7",
+  "schema_max": "0259",
+  "migration_files": 253,
+  "full_bundle_sha256": "ce5c6693f326aab46b0db8121e4318b9ea031b7fe733431a73b95338206f04bf",
+  "app_update_sha256": "3f26402aa98b3d0fb9f137c01481d6ce1c2316282e89f64e87e0993fd44e503d",
+  "binary_sha256": "ef11aab52df9bf34123713cde015fa4b0afa871727ac2883d9bfc9d9422fec6b"
+}

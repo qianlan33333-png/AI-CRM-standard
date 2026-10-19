@@ -1,0 +1,33 @@
+CREATE TABLE
+DO
+          table_name           | row_count 
+-------------------------------+-----------
+ access_super_admin_control    |         1
+ admin_access_audit            |         1
+ admin_login_audit             |         1
+ admin_login_rate_limits       |         1
+ adminops_diagnostic_snapshots |        21
+ adminops_release_projections  |         3
+ admin_sessions                |         1
+ admin_user_roles              |         1
+ admin_users                   |         1
+ config_runtime_active_release |         1
+ config_runtime_applications   |         2
+ distribution_agreements       |         1
+ hxc_dashboard_share_key       |         1
+ platform_schema_migrations    |       253
+ product_dashboard_share_key   |         1
+ river_migration               |         6
+ segment_core_prompt_state     |         1
+(17 rows)
+
+ total_tables | empty_tables 
+--------------+--------------
+          514 |          497
+(1 row)
+
+                                                           version                                                            
+------------------------------------------------------------------------------------------------------------------------------
+ PostgreSQL 16.15 (Debian 16.15-1.pgdg12+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit
+(1 row)
+
